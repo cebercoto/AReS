@@ -1,0 +1,598 @@
+#!/bin/bash
+CMDLIDGERMLINE=NULL
+CMDLIDSOMATIC=NULL
+PROJECTNAME=DEFAULT # PIKACHU_project
+USERID=NULL # PIKACHU_userid. condition later, if still NULL, set it to CMDLIDSOMATIC or CMDLIDGERMLINE
+#TIER1GERM=NULL # PIKACHU_tier1germlinelist
+#TIER1SOMA=NULL # PIKACHU_tier1somaticlist. condition later, if still NULL, set it to TIER1GERM
+IMPVERSION=0.42
+DATE=`date`
+#SAMPLETYPE=FFPE
+ARESVERSION=0.60
+#VAFTHRESHOLD=NULL
+MAFTHRESHOLDGERMLINE=1
+MAFTHRESHOLDTUMOUR=0.05
+BED=NULL
+DATATYPE=Capture
+CNVTHRESHOLD=0.6
+
+while [[ $# > 1 ]]
+do
+key="$1"
+case $key in
+	-H|--help)
+    HELP=$2
+    shift
+    ;;
+    -S|--somatic)
+    CMDLIDSOMATIC=$2
+    shift
+    ;;
+    -G|--germline)
+    CMDLIDGERMLINE=$2
+    shift
+    ;;
+    -P|--projectname)
+    PROJECTNAME=$2
+    shift
+    ;;
+    --userid)
+    USERID=$2
+    shift
+    ;;
+    #--tier1germline)
+    #TIER1GERM=$2
+    #shift
+    #;;
+    #--tier1somatic)
+    #TIER1SOMA=$2
+    #shift
+    #;;
+    --bed)
+    BED=$2
+    shift
+    ;;
+    --type)
+    DATATYPE=$2
+    shift
+    ;;
+    #--vaf)
+    #VAFTHRESHOLD=$2
+    #shift
+    #;;
+    --maf-germline)
+    MAFTHRESHOLDGERMLINE=$2
+    shift
+    ;;
+    --maf-tumour)
+    MAFTHRESHOLDTUMOUR=$2
+    shift
+    ;;
+    --cnv)
+    CNVTHRESHOLD=$2
+    shift
+    ;;
+esac
+shift
+done
+
+IFS=$'\n'
+
+## Chek files
+if [ ${CMDLIDGERMLINE} == "NULL" ]; then
+    if [ ${CMDLIDSOMATIC} == "NULL" ]; then
+        echo -e "No sample provided"
+        exit
+    fi
+fi
+############################## also put checks for the existance of .scores.txt and Coverage.summary files
+
+############################## Add a check for bed file, and if not present use whole genome
+
+## Pick a generic sample name from file names if no sample name is provided
+if [ ${USERID} == "NULL" ]; then
+    if [ ${CMDLIDGERMLINE} == "NULL" ]; then
+        USERID=${CMDLIDSOMATIC}
+    elif [ ${CMDLIDSOMATIC} == "NULL" ]; then
+        USERID=${CMDLIDGERMLINE}
+    else
+        USERID=`echo -e "${CMDLIDSOMATIC}_${CMDLIDGERMLINE}"`
+    fi
+fi
+
+## make the CMDL ID depending on files present, i.e. somatic and/or germline
+if [ ${CMDLIDGERMLINE} == "NULL" ]; then
+    CMDLID=${CMDLIDSOMATIC}
+elif [ ${CMDLIDSOMATIC} == "NULL" ]; then
+    CMDLID=${CMDLIDGERMLINE}
+else
+    CMDLID=`echo -e "${CMDLIDSOMATIC}_${CMDLIDGERMLINE}"`
+fi
+
+## Prepare somatic VAF and MAF threshold for somatic and germline
+################## have to modify this section and make it more accomodating for things like WES or WGS
+
+if [ ${CMDLIDSOMATIC} != "NULL" ]; then
+    if [ ${DATATYPE} = "Capture" ]; then
+        COVFORVAFSOMATIC=`grep ${CMDLIDSOMATIC} *.QC.txt | cut -f27`
+        if [ 1 -eq "$(echo "${COVFORVAFSOMATIC} > 500" | bc)" ]; then
+            VAFTHRESHOLD=0.01
+            SVTHRESHOLD=50
+            SNVTHRESHOLD=100
+        elif [ 1 -eq "$(echo "${COVFORVAFSOMATIC} > 200" | bc)" ]; then
+            VAFTHRESHOLD=0.03
+            SVTHRESHOLD=50
+            SNVTHRESHOLD=100
+        else
+            VAFTHRESHOLD=0.10
+            SVTHRESHOLD=50
+            SNVTHRESHOLD=50
+        fi
+    elif [ ${DATATYPE} = "WGS" ]; then
+        echo -e "Not supported at the moment"
+        exit
+    elif [ ${DATATYPE} = "WES" ]; then
+        COVFORVAFSOMATIC=`grep ${CMDLIDSOMATIC} *.QC.txt | cut -f27`
+        if [ 1 -eq "$(echo "${COVFORVAFSOMATIC} > 100" | bc)" ]; then
+            VAFTHRESHOLD=0.05
+            SVTHRESHOLD=50
+            SNVTHRESHOLD=40
+        else
+            VAFTHRESHOLD=0.10
+            SVTHRESHOLD=50
+            SNVTHRESHOLD=40
+        fi
+    else
+        echo -e "Unknown data type"
+        exit
+    fi
+fi
+
+if [ ${CMDLIDGERMLINE} != "NULL" ]; then
+    if [ ${DATATYPE} = "Capture" ]; then
+        COVFORVAFGERMLINE=`grep ${CMDLIDGERMLINE} *.QC.txt | cut -f27`
+        if [ 1 -eq "$(echo "${COVFORVAFGERMLINE} > 500" | bc)" ]; then
+            SVTHRESHOLDGERM=40
+            SNVTHRESHOLDGERM=40
+        elif [ 1 -eq "$(echo "${COVFORVAFGERMLINE} > 200" | bc)" ]; then
+            SVTHRESHOLDGERM=40
+            SNVTHRESHOLDGERM=40
+        else
+            SVTHRESHOLDGERM=40
+            SNVTHRESHOLDGERM=40
+        fi
+    elif [ ${DATATYPE} = "WGS" ]; then
+        echo -e "Not supported at the moment"
+        exit
+    elif [ ${DATATYPE} = "WES" ]; then
+        COVFORVAFGERMLINE=`grep ${CMDLIDGERMLINE} *.QC.txt | cut -f27`
+        if [ 1 -eq "$(echo "${COVFORVAFGERMLINE} > 100" | bc)" ]; then
+            SVTHRESHOLDGERM=40
+            SNVTHRESHOLDGERM=40
+        else
+            SVTHRESHOLDGERM=20
+            SNVTHRESHOLDGERM=20
+        fi
+    else
+        echo -e "Unknown data type"
+        exit
+    fi
+fi
+
+## copy the HTML template here with the USERID name
+cp /data/Resources/Software/ceberSUITE/AReS/Report\ Template.html ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_file/${CMDLID}/" ${CMDLID}-${USERID}.html
+
+## Header PIKACHU_file and replace some general variables
+sed -i -e "s/PIKACHU_header2/350 gene panel sequencing for sample ${USERID} (tumour sample ${CMDLIDSOMATIC} and germline sample ${CMDLIDGERMLINE}), Processed on the ${DATE}/" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_header/Project ${PROJECTNAME}, Sample ${USERID}/" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_sampleuserid/${USERID}/g" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_impversion/${IMPVERSION}/g" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_date/${DATE}/g" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_aresversion/${ARESVERSION}/g" ${CMDLID}-${USERID}.html
+sed -i -e "s/PIKACHU_vafthreshold/${VAFTHRESHOLD}/" ${CMDLID}-${USERID}.html
+
+################################################################################### Germline PROPER section
+if [ ${CMDLIDSOMATIC} != "NULL" ]; then 
+    ## get the variant info from the somatic call not using germline, to get the VAFs in toumour
+    awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $29 "\t" $13 "\t" $31 }'  ${CMDLIDSOMATIC}*_hg38.bwa_somaticNOGLF.QC.scores.filter.txt > .HTML.SOMATICONLY.PROCESSED
+
+    ## make a somatic annotation to add the mutations also in germline
+    cp ${CMDLIDSOMATIC}*_hg38.bwa_somatic.QC.scores.filter.txt .HTML.SOMATIC.PROCESSED
+else
+    touch .HTML.SOMATICONLY.PROCESSED
+    touch .HTML.SOMATIC.PROCESSED
+fi
+
+if [ ${CMDLIDGERMLINE} != "NULL" ]; then
+    ## insert the germline cov and VAF plot
+    if [ -e ${CMDLIDGERMLINE}*_hg38.bwa.CNV.bed ]; then
+        base64 ${CMDLIDGERMLINE}*.CNV.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CNVsgermlineplot.base64
+        awk 'BEGIN{getline bobo < ".HTML.CNVsgermlineplot.base64"}/PIKACHU_CNVsgermlineplot/{gsub("PIKACHU_CNVsgermlineplot", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk -F '\t' '{ sub ("PIKACHU_CNVsgermlineplot" , "<b>No CNVs detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## PIKACHU_tier1germlineresults (table): get from the germline file the filtered (filter column and CliVar,... columns for pathogenic/oncogenic,...) results for the tier 1 genes, make it into HTML table format
+    cat ${CMDLIDGERMLINE}*_hg38.bwa.QC.scores.filter.txt | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,27,30,22,23,8,32,33,34,35,36,31,94,98,13 | awk -F '\t' '{ if ( $18 ~ "association" || $18 ~ "Affects" || $18 ~ "drug_response" || $18 ~ "Pathogenic" || $18 ~ "Likely_pathogenic" || $18 ~ "protective" || $18 ~ "risk_factor" || $19 ~ "Pathogenic" || $21 ~ "Oncogenic" || $22 > 0 || $17 > 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLDGERM="${SNVTHRESHOLDGERM}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDGERMLINE=${MAFTHRESHOLDGERMLINE} '{ if ( $12 < MAFTHRESHOLDGERMLINE || $13 < MAFTHRESHOLDGERMLINE ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u > .HTML.CRVGERMLINERESULTS.TEMP
+    for i in `cat .HTML.CRVGERMLINERESULTS.TEMP`; do
+        GENE=`echo ${i} | awk -F '\t' '{ print $3 }'`
+        BP=`echo ${i} | awk -F '\t' '{ print $1 }' | sed -e "s/chr[0-9A-Za-z]\+:\([0-9]\+\)-[0-9]\+/\1/"`
+        let BP2=BP-1
+        CHR=`echo ${i} | awk -F '\t' '{ print $1 }' | sed -e "s/\(chr[0-9A-Za-z]\+\):[0-9]\+-[0-9]\+/\1/"`
+        if [ `grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP} | wc -l` -eq 1 ]; then
+            VAFINTUMOUR=`grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP} | grep -w ${CHR} | awk -F '\t' '{ print $2 }'`
+            grep -w ${GENE} ${CMDLIDSOMATIC}*_hg38.bwa_somaticNOGLF.QC.scores.filter.txt | grep -w ${BP} | grep -w ${CHR} | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $31 != "-9" ) $31="-9" }1' >> .HTML.SOMATIC.PROCESSED
+        elif [ `grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP2} | wc -l` -eq 1 ]; then
+            VAFINTUMOUR=`grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP2} | awk -F '\t' '{ print $2 }'`
+            grep -w ${GENE} ${CMDLIDSOMATIC}*_hg38.bwa_somaticNOGLF.QC.scores.filter.txt | grep -w ${BP2} | grep -w ${CHR} | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $31 != "-9" ) $31="-9" }1' >> .HTML.SOMATIC.PROCESSED
+        else
+            VAFINTUMOUR=0
+        fi
+        echo -e "${i}\t${VAFINTUMOUR}"
+    done |  cut -d $'\t' --complement -f 1,20 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $19 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 "\t" $15 "\t" $16 "\t" $17 "\t" $18 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.CRVGERMLINERESULTS
+
+    cat ${CMDLIDGERMLINE}*_hg38.bwa.QC.scores.filter.txt | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,27,30,22,23,8,32,33,34,35,36,31,94,98,13 | awk -F '\t' '{ if ( $18 ~ "association" || $18 ~ "Affects" || $18 ~ "drug_response" || $18 ~ "Pathogenic" || $18 ~ "Likely_pathogenic" || $18 ~ "protective" || $18 ~ "risk_factor" || $19 ~ "Pathogenic" || $21 ~ "Oncogenic" || $22 > 0 || $17 > 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLDGERM="${SNVTHRESHOLDGERM}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u |  cut -d $'\t' --complement -f 1,20 | cut -d $'\t' -f 2 > .HTML.CRVGERMLINEGENES
+
+    if [ `cat .HTML.CRVGERMLINERESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_crvgermlineresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.CRVGERMLINERESULTS"}/PIKACHU_crvgermlineresults/{gsub("PIKACHU_crvgermlineresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## Germline tier 1 SV section
+    cat ${CMDLIDGERMLINE}*_hg38.bwa.SV.bed | awk -v SVTHRESHOLDGERM="${SVTHRESHOLDGERM}" -F '\t' '{ if ( $6 + $7 >= SVTHRESHOLDGERM ) print }' | awk -F '\t' '{ if ( $11 < 0.01 ) print }' | cut -f1,2,3,4,5,6,7,8 | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CRVSVSGERMLINERESULTS
+    cat ${CMDLIDGERMLINE}*_hg38.bwa.SV.bed | awk -v SVTHRESHOLDGERM="${SVTHRESHOLDGERM}" -F '\t' '{ if ( $6 + $7 >= SVTHRESHOLDGERM ) print }' | awk -F '\t' '{ if ( $11 < 0.01 ) print }' | cut -f 2,4 | sed -e "s/\t/\n/g" > .HTML.CRVSVSGERMLINEGENES
+
+    if [ `cat .HTML.CRVSVSGERMLINERESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_crvSVsgermlineresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.CRVSVSGERMLINERESULTS"}/PIKACHU_crvSVsgermlineresults/{gsub("PIKACHU_crvSVsgermlineresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## Germline tier 1 CNVs
+    if [ -e ${CMDLIDGERMLINE}*_hg38.bwa.CNV.bed ]; then
+        for i in `cat ${BED}.genes`; do
+            grep -w ${i} ${CMDLIDGERMLINE}*_hg38.bwa.CNV.bed | awk -v GENE="${i}" -F '\t' '{ print GENE "\t" $1 "\t" $2 "\t" $3 "\t" $5 }' | awk -F '\t' -v CNVTHRESHOLD=${CNVTHRESHOLD} '{ if ( $5 > CNVTHRESHOLD || $5 < -CNVTHRESHOLD ) print }'
+        done | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CRVSCNVSGERMLINERESULTS
+        for i in `cat ${BED}.genes`; do
+            grep -w ${i} ${CMDLIDGERMLINE}*_hg38.bwa.CNV.bed | awk -v GENE="${i}" -F '\t' '{ print GENE "\t" $1 "\t" $2 "\t" $3 "\t" $5 }' | awk -F '\t' -v CNVTHRESHOLD=${CNVTHRESHOLD} '{ if ( $5 > CNVTHRESHOLD || $5 < -CNVTHRESHOLD ) print }'
+        done | cut -f1 > .HTML.CRVSCNVSGERMLINEGENES
+        if [ `cat .HTML.CRVSCNVSGERMLINERESULTS | wc -l` = 0 ]; then
+            awk -F '\t' '{ sub (".*PIKACHU_crvCNVsgermlineresults" , "<b>No CNVs Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+        else
+            awk 'BEGIN{getline bobo < ".HTML.CRVSCNVSGERMLINERESULTS"}/PIKACHU_crvCNVsgermlineresults/{gsub("PIKACHU_crvCNVsgermlineresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+        fi
+    else
+        awk -F '\t' '{ sub (".*PIKACHU_crvCNVsgermlineresults" , "<b>No CNVs detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## PIKACHU_tier3germlineresults (table): get the list of all muts with score < 0.6 and substract the tier 1 and 2 mutations, make it into HTML table format
+    cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,27,30,22,23,8,32,33,34,35,36,31,94,98,13 ${CMDLIDGERMLINE}*_hg38.bwa.QC.scores.filter.txt | awk -F '\t' '{ if ( $18 ~ "Conflicting_interpretations_of_pathogenicity" && $17 < 0.60 || $18 ~ "not_provided" && $17 < 0.60 || $18 ~ "other" && $17 < 0.60 || $18 ~ "Uncertain_significance" && $17 < 0.60 || $19 ~ "Uncertain significance" && $17 < 0.60 || $21 ~ "Inconclusive" && $17 < 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLDGERM="${SNVTHRESHOLDGERM}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDGERMLINE=${MAFTHRESHOLDGERMLINE} '{ if ( $12 < MAFTHRESHOLDGERMLINE || $13 < MAFTHRESHOLDGERMLINE ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u > .HTML.VUSGERMLINERESULTS.TEMP
+    for i in `cat .HTML.VUSGERMLINERESULTS.TEMP`; do
+        GENE=`echo ${i} | awk -F '\t' '{ print $3 }'`
+        BP=`echo ${i} | awk -F '\t' '{ print $1 }' | sed -e "s/chr[0-9A-Za-z]\+:\([0-9]\+\)-[0-9]\+/\1/"`
+        let BP2=BP-1
+        CHR=`echo ${i} | awk -F '\t' '{ print $1 }' | sed -e "s/\(chr[0-9A-Za-z]\+\):[0-9]\+-[0-9]\+/\1/"`
+        if [ `grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP} | wc -l` -eq 1 ]; then
+            VAFINTUMOUR=`grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP} | grep -w ${CHR} | awk -F '\t' '{ print $2 }'`
+            grep -w ${GENE} ${CMDLIDSOMATIC}*_hg38.bwa_somaticNOGLF.QC.scores.filter.txt | grep -w ${BP} | grep -w ${CHR} | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $31 != "-9" ) $31="-9" }1' >> .HTML.SOMATIC.PROCESSED
+        elif [ `grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP2} | wc -l` -eq 1 ]; then
+            VAFINTUMOUR=`grep -w ${CHR} .HTML.SOMATICONLY.PROCESSED | grep -w ${BP2} | awk -F '\t' '{ print $2 }'`
+            grep -w ${GENE} ${CMDLIDSOMATIC}*_hg38.bwa_somaticNOGLF.QC.scores.filter.txt | grep -w ${BP2} | grep -w ${CHR} | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $31 != "-9" ) $31="-9" }1' >> .HTML.SOMATIC.PROCESSED
+        else
+            VAFINTUMOUR=0
+        fi
+        echo -e "${i}\t${VAFINTUMOUR}"
+    done |  cut -d $'\t' --complement -f 1,20 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $19 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 "\t" $15 "\t" $16 "\t" $17 "\t" $18 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.VUSGERMLINERESULTS
+
+    cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,27,30,22,23,8,32,33,34,35,36,31,94,98,13 ${CMDLIDGERMLINE}*_hg38.bwa.QC.scores.filter.txt | awk -F '\t' '{ if ( $18 ~ "Conflicting_interpretations_of_pathogenicity" && $17 < 0.60 || $18 ~ "not_provided" && $17 < 0.60 || $18 ~ "other" && $17 < 0.60 || $18 ~ "Uncertain_significance" && $17 < 0.60 || $19 ~ "Uncertain significance" && $17 < 0.60 || $21 ~ "Inconclusive" && $17 < 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLDGERM="${SNVTHRESHOLDGERM}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDGERMLINE=${MAFTHRESHOLDGERMLINE} '{ if ( $12 < MAFTHRESHOLDGERMLINE || $13 < MAFTHRESHOLDGERMLINE ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u |  cut -d $'\t' --complement -f 1,20 | cut -d $'\t' -f 2 > .HTML.VUSGERMLINEGENES
+
+    if [ `cat .HTML.VUSGERMLINERESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_vusgermlineresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.VUSGERMLINERESULTS"}/PIKACHU_vusgermlineresults/{gsub("PIKACHU_vusgermlineresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## Germline tier 3 SV section: is there anything ever here? since SVs are not classified as pathogenic or not, all in tier 1 list would be in tier 1 section and the rest would be in tier 2 section
+    #awk -F '\t' '{ sub ("<tr> <th> Break Point 1 </th> <th> Genes at BP1 </th> <th> Break Point 2 </th> <th> Genes at BP2 </th> <th> Type </th> <th> Reads Reference </th> <th> Reads Variant </th> <th> VAF </th> </tr> PIKACHU_tier3SVsgermlineresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+
+    ## PIKACHU_germlinenetwork (image) and PIKACHU_germlineora (table): merge the list of genes from tiers 1 , 2 and 3 mutations and use the STRING API to generate the network image and ORA. convert the image to HTML code and put the ORA table in HTML table format.
+
+    cat .HTML.CRVGERMLINEGENES .HTML.CRVSVSGERMLINEGENES .HTML.CRVSCNVSGERMLINEGENES | sed -e "/^\./d" | sed -e "s/;/\n/g" | sort -u > .HTML.GERMLINEGENES
+    if [ `cat .HTML.GERMLINEGENES | wc -l` -gt 200 ]; then
+        head -n200 .HTML.GERMLINEGENES > kk && mv kk .HTML.GERMLINEGENES
+    fi
+    GERMLINEGENES=`cat .HTML.GERMLINEGENES | sed '$!{:a;N;s/\n/%0d/;ta}'`
+    curl -X POST -o .HTML.GermlineNetwork.png "https://string-db.org/api/image/network?identifiers=${GERMLINEGENES}&add_white_nodes=5&network_flavor=confidence&species=9606" 2> /dev/null
+    base64 .HTML.GermlineNetwork.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.GermlineNetwork.base64
+    awk 'BEGIN{getline bobo < ".HTML.GermlineNetwork.base64"}/PIKACHU_germlinenetwork/{gsub("PIKACHU_germlinenetwork", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sleep 1
+    curl -X POST -o .HTML.GermlineORA.txt "https://string-db.org/api/tsv/enrichment?identifiers=${GERMLINEGENES}&species=9606" 2> /dev/null
+    ( head -n1 .HTML.GermlineORA.txt && tail -n +2 .HTML.GermlineORA.txt | grep -v -w PMID | sort -k9,9g ) > .HTML.GermlineORA.temp && mv .HTML.GermlineORA.temp .HTML.GermlineORA.txt
+    awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $9 "\t" $10 "\t" $7}' .HTML.GermlineORA.txt | sed -e "s/,/, /g" | tail -n +2 | head -n 20 > .HTML.GermlineORA.temp && mv .HTML.GermlineORA.temp .HTML.GermlineORA.txt
+    sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" .HTML.GermlineORA.txt | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.GermlineORA.temp && mv .HTML.GermlineORA.temp .HTML.GermlineORA.txt
+    if [ `cat .HTML.GermlineORA.txt | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_germlineora" , "No Pathways Found") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.GermlineORA.txt"}/PIKACHU_germlineora/{gsub("PIKACHU_germlineora", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+else
+    awk -F '\t' '{ sub (".*PIKACHU_crvgermlineresults" , "<b>No Germline Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_crvSVsgermlineresults" , "<b>No Germline Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_vusgermlineresults" , "<b>No Germline Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_germlineora" , "<b>No Germline Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_germlinenetwork.*" , "<b>No Germline Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_CNVsgermlineplot.\+/<b>No Germline Provided<\/b>/" ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_crvCNVsgermlineresults/<b>No Germline Provided<\/b>/" ${CMDLID}-${USERID}.html
+fi
+################################################################################### Somatic section
+if [ ${CMDLIDSOMATIC} != "NULL" ]; then
+    ## PIKACHU_burden (float): count the number of total filtered mutations (this time only the filter column) and divide by panel size. conditions to make different paragraphs depending on if it is hypermutated or not
+    ## Calculate the size of the panel/whatever
+    BEDSIZE=`sort -k1,1 -k2,2n ${BED}.bed | bedtools merge -i stdin | awk -F'\t' 'BEGIN{SUM=0}{ SUM+=$3-$2 }END{print SUM}'`
+    NREGIONS=`sort -k1,1 -k2,2n ${BED}.bed | bedtools merge -i stdin | wc -l`
+    PANELSIZE=`echo -e "${NREGIONS}*200 + ${BEDSIZE}" | bc -l`
+    TUMOURAVGCOV=`grep ${CMDLIDSOMATIC} *.QC.txt | cut -f27`
+
+    ## condition to only do the burden if the size of the panel is bigger than X, if not NA #### AND condition to only do burden if the avg cov of the sequencing is at least 200x, if not NA
+    if [ ${BEDSIZE} -ge 1000000 ] && [ `echo "${TUMOURAVGCOV} > 200" | bc -l` -eq 1 ] && [ ${DATATYPE} = "Capture" ]; then
+        #NMUTATIONS=`awk -F '\t' '{ print $1 "_" $2 "-" $3 "\t" $0 }' ${CMDLIDSOMATIC}*_somatic.QC.scores.txt | awk -F '\t' '{ if ( $32 == "-9" || $32 == "clustered_events" || $32 == "t_lod" || $32 == "clustered_events;t_lod" ) print }' | sort -k1,1 -u | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $30 >= VAFTHRESHOLD ) print }' | wc -l`
+        NMUTATIONS=`awk -F '\t' '{ print $1 "_" $2 "-" $3 "\t" $0 }' ${CMDLIDSOMATIC}*_somatic.QC.scores.filter.txt | sort -k1,1 -u | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $30 >= VAFTHRESHOLD ) print }' | wc -l`
+        MUTBURDEN=`echo "scale=2; ${NMUTATIONS}*1000000/${PANELSIZE}" | bc`
+    elif [ ${BEDSIZE} -ge 1000000 ] && [ `echo "${TUMOURAVGCOV} > 40" | bc -l` -eq 1 ] && [ ${DATATYPE} = "WES" ]; then
+        NMUTATIONS=`awk -F '\t' '{ print $1 "_" $2 "-" $3 "\t" $0 }' ${CMDLIDSOMATIC}*_somatic.QC.scores.filter.txt | sort -k1,1 -u | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $30 >= VAFTHRESHOLD ) print }' | wc -l`
+        MUTBURDEN=`echo "scale=2; ${NMUTATIONS}*1000000/${PANELSIZE}" | bc`
+    else
+        MUTBURDEN=NA
+    fi
+    sed -i -e "s/PIKACHU_mutburden/${MUTBURDEN}/g" ${CMDLID}-${USERID}.html
+    if [ ${MUTBURDEN} == "NA" ]; then
+        sed -i -e "s/PIKACHU_mbstatus/unknown/g" ${CMDLID}-${USERID}.html
+    elif [ `echo "${MUTBURDEN} >= 20" | bc -l` -eq 1 ]; then
+        sed -i -e "s/PIKACHU_mbstatus/high/g" ${CMDLID}-${USERID}.html
+    elif [ `echo "${MUTBURDEN} < 20" | bc -l` -eq 1 ] && [ `echo "${MUTBURDEN} >= 10" | bc -l` -eq 1 ]; then
+        sed -i -e "s/PIKACHU_mbstatus/medium/g" ${CMDLID}-${USERID}.html
+    else 
+        sed -i -e "s/PIKACHU_mbstatus/low/g" ${CMDLID}-${USERID}.html
+    fi
+
+    ## insert the somatic cov and VAF plot
+
+    if [ -e ${CMDLIDSOMATIC}*_hg38.bwa.CNV.bed ]; then
+        base64 ${CMDLIDSOMATIC}*.CNV.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CNVssomaticplot.base64
+        awk 'BEGIN{getline bobo < ".HTML.CNVssomaticplot.base64"}/PIKACHU_CNVssomaticplot/{gsub("PIKACHU_CNVssomaticplot", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk -F '\t' '{ sub ("PIKACHU_CNVssomaticplot" , "<b>No CNVs detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## get the variant info from the germline call to get the present status in germline, if there's one
+    if [ ${CMDLIDGERMLINE} != "NULL" ]; then 
+        awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $29 "\t" $13 "\t" $31 }'  ${CMDLIDGERMLINE}*_hg38.bwa.QC.scores.filter.txt > .HTML.GERMLINE.PROCESSED
+    else
+        touch .HTML.GERMLINE.PROCESSED
+    fi
+
+    ## Somatic tier 1 
+    cat .HTML.SOMATIC.PROCESSED | awk -F '\t' '{ if ( $31 == "-9" || $31 == "clustered_events" || $31 == "t_lod" || $31 == "clustered_events;t_lod" ) print }' | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,29,30,22,23,8,33,34,35,36,37,32,94,98,13 | awk -F '\t' '{ if ( $18 ~ "association" || $18 ~ "Affects" || $18 ~ "drug_response" || $18 ~ "Pathogenic" || $18 ~ "Likely_pathogenic" || $18 ~ "protective" || $18 ~ "risk_factor" || $19 ~ "Pathogenic" || $21 ~ "Oncogenic" || $22 > 0 || $17 > 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDTUMOUR=${MAFTHRESHOLDTUMOUR} '{ if ( $12 < MAFTHRESHOLDTUMOUR || $13 < MAFTHRESHOLDTUMOUR ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $9 >= VAFTHRESHOLD ) print }' > .HTML.CRVSOMATICRESULTS.TEMP
+    for i in `cat .HTML.CRVSOMATICRESULTS.TEMP`; do
+        POS=`echo ${i} | awk -F '\t' '{ print $1 }'`
+        if [ `grep ${POS} .HTML.GERMLINE.PROCESSED | wc -l` -eq 1 ]; then
+            PRESENTINGERMLINE=Yes
+        else
+            PRESENTINGERMLINE=No
+        fi
+        echo -e "${i}\t${PRESENTINGERMLINE}"
+    done |  cut -d $'\t' --complement -f 1,20 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $19 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 "\t" $15 "\t" $16 "\t" $17 "\t" $18 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.CRVSOMATICRESULTS
+
+    cat .HTML.SOMATIC.PROCESSED | awk -F '\t' '{ if ( $31 == "-9" || $31 == "clustered_events" || $31 == "t_lod" || $31 == "clustered_events;t_lod" ) print }' | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,29,30,22,23,8,33,34,35,36,37,32,94,98,13 | awk -F '\t' '{ if ( $18 ~ "association" || $18 ~ "Affects" || $18 ~ "drug_response" || $18 ~ "Pathogenic" || $18 ~ "Likely_pathogenic" || $18 ~ "protective" || $18 ~ "risk_factor" || $19 ~ "Pathogenic" || $21 ~ "Oncogenic" || $22 > 0 || $17 > 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDTUMOUR=${MAFTHRESHOLDTUMOUR} '{ if ( $12 < MAFTHRESHOLDTUMOUR || $13 < MAFTHRESHOLDTUMOUR ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u |  cut -d $'\t' --complement -f 1,20 | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $8 >= VAFTHRESHOLD ) print }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | cut -d $'\t' -f 2 > .HTML.CRVSOMATICGENES
+
+    if [ `cat .HTML.CRVSOMATICRESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_crvsomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.CRVSOMATICRESULTS"}/PIKACHU_crvsomaticresults/{gsub("PIKACHU_crvsomaticresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## Somatic tier 1 SVs
+    cat ${CMDLIDSOMATIC}*_hg38.bwa.SV.bed | awk -v SVTHRESHOLD="${SVTHRESHOLD}" -F '\t' '{ if ( $6 + $7 >= SVTHRESHOLD ) print }' | awk -F '\t' '{ if ( $11 < 0.01 ) print }' | cut -f1,2,3,4,5,6,7,8 | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CRVSVSSOMATICRESULTS
+    cat ${CMDLIDSOMATIC}*_hg38.bwa.SV.bed | awk -v SVTHRESHOLD="${SVTHRESHOLD}" -F '\t' '{ if ( $6 + $7 >= SVTHRESHOLD ) print }' | awk -F '\t' '{ if ( $11 < 0.01 ) print }' | cut -f 2,4 | sed -e "s/\t/\n/g" > .HTML.CRVSVSSOMATICGENES
+
+    if [ `cat .HTML.CRVSVSSOMATICRESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_crvSVssomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.CRVSVSSOMATICRESULTS"}/PIKACHU_crvSVssomaticresults/{gsub("PIKACHU_crvSVssomaticresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+    
+    ## Somatic tier 1 CNVs
+    FOLD80TUMOUR=`grep ${CMDLIDSOMATIC} *.QC.txt | cut -f32`
+    if [ -e ${CMDLIDSOMATIC}*_hg38.bwa.CNV.bed ]; then
+        for i in `cat ${BED}.genes`; do
+            grep -w ${i} ${CMDLIDSOMATIC}*_hg38.bwa.CNV.bed | awk -v GENE="${i}" -F '\t' '{ print GENE "\t" $1 "\t" $2 "\t" $3 "\t" $5 }' | awk -F '\t' -v CNVTHRESHOLD=${CNVTHRESHOLD} '{ if ( $5 > CNVTHRESHOLD || $5 < -CNVTHRESHOLD ) print }'
+        done | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.CRVSCNVSSOMATICRESULTS
+        for i in `cat ${BED}.genes`; do
+            grep -w ${i} ${CMDLIDSOMATIC}*_hg38.bwa.CNV.bed | awk -v GENE="${i}" -F '\t' '{ print GENE "\t" $1 "\t" $2 "\t" $3 "\t" $5 }' | awk -F '\t' -v CNVTHRESHOLD=${CNVTHRESHOLD} '{ if ( $5 > CNVTHRESHOLD || $5 < -CNVTHRESHOLD ) print }'
+        done | cut -f1 > .HTML.CRVSCNVSSOMATICGENES
+        if [ `cat .HTML.CRVSCNVSSOMATICRESULTS | wc -l` = 0 ]; then
+            awk -F '\t' '{ sub (".*PIKACHU_crvCNVssomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+        else
+            awk 'BEGIN{getline bobo < ".HTML.CRVSCNVSSOMATICRESULTS"}/PIKACHU_crvCNVssomaticresults/{gsub("PIKACHU_crvCNVssomaticresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+        fi
+    else
+        awk -F '\t' '{ sub (".*PIKACHU_crvCNVssomaticresults" , "<b>No CNVs detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+
+    ## tier 3
+    awk -F '\t' '{ if ( $31 == "-9" || $31 == "clustered_events" || $31 == "t_lod" || $31 == "clustered_events;t_lod" ) print }' .HTML.SOMATIC.PROCESSED | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,29,30,22,23,8,33,34,35,36,37,32,94,98,13 | awk -F '\t' '{ if ( $18 ~ "Conflicting_interpretations_of_pathogenicity" && $17 < 0.60 || $18 ~ "not_provided" && $17 < 0.60 || $18 ~ "other" && $17 < 0.60 || $18 ~ "Uncertain_significance" && $17 < 0.60 || $19 ~ "Uncertain significance" && $17 < 0.60 || $21 ~ "Inconclusive" && $17 < 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDTUMOUR=${MAFTHRESHOLDTUMOUR} '{ if ( $12 < MAFTHRESHOLDTUMOUR || $13 < MAFTHRESHOLDTUMOUR ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $9 >= VAFTHRESHOLD ) print }' > .HTML.VUSSOMATICRESULTS.TEMP
+    for i in `cat .HTML.VUSSOMATICRESULTS.TEMP`; do
+        POS=`echo ${i} | awk -F '\t' '{ print $1 }'`
+        if [ `grep ${POS} .HTML.GERMLINE.PROCESSED | wc -l` -eq 1 ]; then
+            PRESENTINGERMLINE=Yes
+        else
+            PRESENTINGERMLINE=No
+        fi
+        echo -e "${i}\t${PRESENTINGERMLINE}"
+    done |  cut -d $'\t' --complement -f 1,20 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $19 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 "\t" $15 "\t" $16 "\t" $17 "\t" $18 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.VUSSOMATICRESULTS
+
+    awk -F '\t' '{ if ( $31 == "-9" || $31 == "clustered_events" || $31 == "t_lod" || $31 == "clustered_events;t_lod" ) print }' .HTML.SOMATIC.PROCESSED | cut -d $'\t' -f 1,2,3,5,19,9,14,6,7,20,29,30,22,23,8,33,34,35,36,37,32,94,98,13 | awk -F '\t' '{ if ( $18 ~ "Conflicting_interpretations_of_pathogenicity" && $17 < 0.60 || $18 ~ "not_provided" && $17 < 0.60 || $18 ~ "other" && $17 < 0.60 || $18 ~ "Uncertain_significance" && $17 < 0.60 || $19 ~ "Uncertain significance" && $17 < 0.60 || $21 ~ "Inconclusive" && $17 < 0.60 ) print }' | awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $16 >= SNVTHRESHOLDGERM ) print }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $11 "\t" $8 "\t" $10 "\t" $5 " " $6 "\t" $12 "\t" $15 "\t" $16 "\t" $13 "\t" $14 "\t" $7 "\t" $18 "\t" $23 "\t" $19 "\t" $20 "\t" $21 "\t" $22 "\t" $24 "\t" $17 "\t" $9 }' | awk -F '\t' 'BEGIN { OFS="\t" }  { sub( $1, $1 "\t" "<a href=\"http://www.ensembl.org/Homo_sapiens/Location/View?r="$1"\"> "$1" </a>" , $1) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 > 0 ) sub( $15, "<a href=\"http://www.ncbi.nlm.nih.gov/clinvar/?term="$15"[alleleid]\"> "$14" </a>" , $15) }1' | cut -d $'\t' --complement -f 14 | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $15 != "-9" ) sub( $15, "<a href=\"http://wintervar.wglab.org/\"> "$15" </a>" , $15) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /;.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( /,.*/ , "" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( "ID=COSM" , ""  , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $16 != "-9" ) sub( $16 , "<a href=\"https://cancer.sanger.ac.uk/cosmic/mutation/overview?id=" $16 "\" > COSM" $16" </a>" , $16 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $17 != "-9" ) sub( $17 , "<a href=\"https://oncokb.org/gene/" $3 "/" $6 "\"> "$17" </a>" , $17 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { if ( $19 != "-9" ) sub( $19 , "<a href=\"https://civic.genome.wustl.edu/links/variants/" $19 "\"> " $18 " </a>" , $19 ) }1' | cut -d $'\t' --complement -f 18 | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $19 , substr($19,1,6) , $19 ) }1' | grep -v "Chr:Start-End" | awk -F '\t' -v MAFTHRESHOLDTUMOUR=${MAFTHRESHOLDTUMOUR} '{ if ( $12 < MAFTHRESHOLDTUMOUR || $13 < MAFTHRESHOLDTUMOUR ) print }' | sort -t $'\t' -k1,1 -k20,20gr | sort -t $'\t' -k1,1 -u |  cut -d $'\t' --complement -f 1,20 | awk -v VAFTHRESHOLD="${VAFTHRESHOLD}" -F '\t' '{ if ( $8 >= VAFTHRESHOLD ) print }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | cut -d $'\t' -f 2 > .HTML.VUSSOMATICGENES
+
+    if [ `cat .HTML.VUSSOMATICRESULTS | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_vussomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.VUSSOMATICRESULTS"}/PIKACHU_vussomaticresults/{gsub("PIKACHU_vussomaticresults", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+    
+    ## Somatic tier 3 SVs: is there anything ever here? since SVs are not classified as pathogenic or not, all in tier 1 list would be in tier 1 section and the rest would be in tier 2 section
+    #awk -F '\t' '{ sub ("<tr> <th> Break Point 1 </th> <th> Genes at BP1 </th> <th> Break Point 2 </th> <th> Genes at BP2 </th> <th> Type </th> <th> Reads Reference </th> <th> Reads Variant </th> <th> VAF </th> </tr> PIKACHU_tier3SVssomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+
+    ## Somatic tier 3 CNVs: is there anything ever here? since SVs are not classified as pathogenic or not, all in tier 1 list would be in tier 1 section and the rest would be in tier 2 section
+    #awk -F '\t' '{ sub ("<tr> <th> Chr </th> <th> Start </th> <th> End </th> <th> Size (Kb) </th> <th> Cov Normal </th> <th> Cov Tumour </th> <th> MPLL </th> <th> Genes </th> </tr> PIKACHU_tier3CNVssomaticresults" , "<b>No Variants Detected</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+
+    ########### Somatic Pathway
+    cat .HTML.CRVSOMATICGENES .HTML.CRVSVSSOMATICGENES .HTML.CRVSCNVSSOMATICGENES 2>/dev/null | sed -e "/^\./d" | sed -e "s/;/\n/g" > .HTML.SOMATICGENES 
+    if [ `cat .HTML.SOMATICGENES | wc -l` -gt 200 ]; then
+        head -n200 .HTML.SOMATICGENES > kk && mv kk .HTML.SOMATICGENES
+    fi
+    SOMATICGENES=`cat .HTML.SOMATICGENES | sed '$!{:a;N;s/\n/%0d/;ta}'`
+    curl -X POST -o .HTML.SomaticNetwork.png "https://string-db.org/api/image/network?identifiers=${SOMATICGENES}&add_white_nodes=5&network_flavor=confidence&species=9606" 2> /dev/null
+    base64 .HTML.SomaticNetwork.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.SomaticNetwork.base64
+    awk 'BEGIN{getline bobo < ".HTML.SomaticNetwork.base64"}/PIKACHU_somaticnetwork/{gsub("PIKACHU_somaticnetwork", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sleep 1
+    curl -X POST -o .HTML.SomaticORA.txt "https://string-db.org/api/tsv/enrichment?identifiers=${SOMATICGENES}&species=9606" 2> /dev/null
+    ( head -n1 .HTML.SomaticORA.txt && tail -n +2 .HTML.SomaticORA.txt | grep -v -w PMID | sort -k9,9g ) > .HTML.SomaticORA.temp && mv .HTML.SomaticORA.temp .HTML.SomaticORA.txt
+    awk -F '\t' '{ print $1 "\t" $2 "\t" $3 "\t" $9 "\t" $10 "\t" $7}' .HTML.SomaticORA.txt | sed -e "s/,/, /g" | tail -n +2 | head -n 20 > .HTML.SomaticORA.temp && mv .HTML.SomaticORA.temp .HTML.SomaticORA.txt
+    sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" .HTML.SomaticORA.txt | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' > .HTML.SomaticORA.temp && mv .HTML.SomaticORA.temp .HTML.SomaticORA.txt
+    if [ `cat .HTML.SomaticORA.txt | wc -l` = 0 ]; then
+        awk -F '\t' '{ sub (".*PIKACHU_somaticora" , "No Pathways Found") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    else
+        awk 'BEGIN{getline bobo < ".HTML.SomaticORA.txt"}/PIKACHU_somaticora/{gsub("PIKACHU_somaticora", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    fi
+else
+    #PIKACHU_sampleuserid
+    #sed -i -e "s/PIKACHU_mutburden/NA/g" ${CMDLID}-${USERID}.html
+    #sed -i -e "s/PIKACHU_mbstatus/Unknown/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_mutburden.\+/<b>No Somatic Provided<\/b>/g" ${CMDLID}-${USERID}.html
+
+    sed -i -e "s/.\+PIKACHU_CNVssomaticplot.\+/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+    # awk -F '\t' '{ sub (".*PIKACHU_CNVssomaticplot.*" , "<b>No Somatic Provided</b>") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+
+    sed -i -e "s/.\+PIKACHU_crvsomaticresults/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_crvSVssomaticresults/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_crvCNVssomaticresults/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+
+    sed -i -e "s/.\+PIKACHU_vussomaticresults/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+
+    sed -i -e "s/.\+PIKACHU_somaticnetwork.\+/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+    sed -i -e "s/.\+PIKACHU_somaticora/<b>No Somatic Provided<\/b>/" ${CMDLID}-${USERID}.html
+fi
+
+################################################################################### QC
+## summary stats
+if [ ${CMDLIDGERMLINE} != "NULL" ] && [ ${CMDLIDSOMATIC} != "NULL" ]; then
+    ## tumour/germline match
+    bgzip -c ${CMDLIDGERMLINE}*hg38.bwa.QC.vcf > .HTML.${CMDLIDGERMLINE}.vcf.gz
+    bgzip -c ${CMDLIDSOMATIC}*hg38.bwa_somaticNOGLF.QC.vcf > .HTML.${CMDLIDSOMATIC}.vcf.gz
+    tabix .HTML.${CMDLIDGERMLINE}.vcf.gz
+    tabix .HTML.${CMDLIDSOMATIC}.vcf.gz
+    bcftools merge .HTML.${CMDLIDGERMLINE}.vcf.gz .HTML.${CMDLIDSOMATIC}.vcf.gz > .HTML.merge.vcf 
+    vcftools --vcf .HTML.merge.vcf --plink --out .HTML.merge 2> /dev/null
+    plink1.90 --allow-no-sex --file .HTML.merge --genome --min 0 --out .HTML.merge > /dev/null 2>&1
+    sed -i -e "s/\s\+/\t/g" .HTML.merge.genome
+    sed -i -e "s/\s\+//" .HTML.merge.genome
+    PIHAT=`tail -n +2 .HTML.merge.genome | awk -F '\t' '{ print $10 }'`
+    if [ `echo "${PIHAT} > 0.50" | bc -l` -eq 1 ]; then
+        RELATEDNESS="come"
+    else
+        RELATEDNESS="do not come"
+    fi
+    sed -i -e "s/PIKACHU_pihat/${PIHAT}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_relatedness/${RELATEDNESS}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_Nregions/${NREGIONS}/g" ${CMDLID}-${USERID}.html
+    ## table
+    ## include lines to determine if the QC file is from panel/WES, amplicon/capture or WGS
+    grep ${CMDLIDGERMLINE} *.QC.txt | awk -F '\t' '{ print $1 "\t" $4 "\t" $16 "\t" $25 "\t" $27 "\t" $32 "\t" $34 "\t" $36 "\t" $40 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $3 , substr($3,1,6) , $3 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $4 , substr($4,1,6) , $4 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $5 , substr($5,1,6) , $5 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $6 , substr($6,1,6) , $6 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $7 , substr($7,1,6) , $7 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $9 , substr($9,1,6) , $9 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $10 , substr($10,1,6) , $10 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $11 , substr($11,1,6) , $11 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $12 , substr($12,1,6) , $12 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $13 , substr($13,1,6) , $13 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $14 , substr($14,1,6) , $14 ) }1' > .HTML.QCTABLE
+    grep ${CMDLIDSOMATIC} *.QC.txt | awk -F '\t' '{ print $1 "\t" $4 "\t" $16 "\t" $25 "\t" $27 "\t" $32 "\t" $34 "\t" $36 "\t" $40 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $3 , substr($3,1,6) , $3 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $4 , substr($4,1,6) , $4 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $5 , substr($5,1,6) , $5 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $6 , substr($6,1,6) , $6 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $7 , substr($7,1,6) , $7 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $9 , substr($9,1,6) , $9 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $10 , substr($10,1,6) , $10 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $11 , substr($11,1,6) , $11 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $12 , substr($12,1,6) , $12 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $13 , substr($13,1,6) , $13 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $14 , substr($14,1,6) , $14 ) }1' >> .HTML.QCTABLE
+    sed -i -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" .HTML.QCTABLE
+    sed -i -e "s/\t/ <\/td> <td> /g" .HTML.QCTABLE
+    sed -i -e ':a;N;$!ba;s/\n/ /g' .HTML.QCTABLE
+    awk 'BEGIN{getline bobo < ".HTML.QCTABLE"}/PIKACHU_qctable/{gsub("PIKACHU_qctable", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    base64 ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.Frag.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.germlinecovfrag.base64
+    base64 ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.Frag.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.somaticcovfrag.base64
+    awk 'BEGIN{getline bobo < ".HTML.germlinecovfrag.base64"}/PIKACHU_germlinecovfrag/{gsub("PIKACHU_germlinecovfrag", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk 'BEGIN{getline bobo < ".HTML.somaticcovfrag.base64"}/PIKACHU_somaticcovfrag/{gsub("PIKACHU_somaticcovfrag", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    ## Low Coverage Regions
+    NGERMLINELOW=`awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.pertarget.txt | wc -l`
+    NSOMATICLOW=`awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.pertarget.txt | wc -l`
+    awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.pertarget.txt | awk -F '\t' '{ printf "%s\t%s\t%s\t%.3f\t%s\t%s\n", $1, $2, $3, $7, $14, $15 }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $5 "\t" $6 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.germlinelow
+    awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.pertarget.txt | awk -F '\t' '{ printf "%s\t%s\t%s\t%.3f\t%s\t%s\n", $1, $2, $3, $7, $14, $15 }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $5 "\t" $6 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.somaticlow
+    sed -i -e "s/PIKACHU_ngermlinelow/${NGERMLINELOW}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_nsomaticlow/${NSOMATICLOW}/g" ${CMDLID}-${USERID}.html
+    PERCGERMLINELOW=`echo "scale=4; ${NGERMLINELOW}/${NREGIONS}*100" | bc`
+    PERCSOMATICLOW=`echo "scale=4; ${NSOMATICLOW}/${NREGIONS}*100" | bc`
+    sed -i -e "s/PIKACHU_percgermlinelow/${PERCGERMLINELOW}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_percsomaticlow/${PERCSOMATICLOW}/g" ${CMDLID}-${USERID}.html
+    awk 'BEGIN{getline bobo < ".HTML.germlinelow"}/PIKACHU_germlinelow/{gsub("PIKACHU_germlinelow", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk 'BEGIN{getline bobo < ".HTML.somaticlow"}/PIKACHU_somaticlow/{gsub("PIKACHU_somaticlow", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+elif [ ${CMDLIDGERMLINE} = "NULL" ]; then
+    ## tumour/germline match
+    bgzip -c ${CMDLIDSOMATIC}*hg38.bwa_somaticNOGLF.QC.vcf > .HTML.${CMDLIDSOMATIC}.vcf.gz
+    tabix .HTML.${CMDLIDSOMATIC}.vcf.gz
+    RELATEDNESS="are unknown whether they come"
+    sed -i -e "s/PIKACHU_pihat/NA/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_relatedness/${RELATEDNESS}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_Nregions/${NREGIONS}/g" ${CMDLID}-${USERID}.html
+    ## table
+    grep ${CMDLIDSOMATIC} *.QC.txt | awk -F '\t' '{ print $1 "\t" $4 "\t" $16 "\t" $25 "\t" $27 "\t" $32 "\t" $34 "\t" $36 "\t" $40 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $3 , substr($3,1,6) , $3 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $4 , substr($4,1,6) , $4 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $5 , substr($5,1,6) , $5 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $6 , substr($6,1,6) , $6 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $7 , substr($7,1,6) , $7 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $9 , substr($9,1,6) , $9 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $10 , substr($10,1,6) , $10 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $11 , substr($11,1,6) , $11 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $12 , substr($12,1,6) , $12 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $13 , substr($13,1,6) , $13 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $14 , substr($14,1,6) , $14 ) }1' >> .HTML.QCTABLE
+    sed -i -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" .HTML.QCTABLE
+    sed -i -e "s/\t/ <\/td> <td> /g" .HTML.QCTABLE
+    sed -i -e ':a;N;$!ba;s/\n/ /g' .HTML.QCTABLE
+    awk 'BEGIN{getline bobo < ".HTML.QCTABLE"}/PIKACHU_qctable/{gsub("PIKACHU_qctable", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    base64 ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.Frag.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.somaticcovfrag.base64
+    awk 'BEGIN{getline bobo < ".HTML.somaticcovfrag.base64"}/PIKACHU_somaticcovfrag/{gsub("PIKACHU_somaticcovfrag", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sed -i -e "/PIKACHU_germlinecovfrag/d" ${CMDLID}-${USERID}.html
+    ## Low Coverage Regions
+    NSOMATICLOW=`awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.pertarget.txt | wc -l`
+    awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDSOMATIC}*/${CMDLIDSOMATIC}*.pertarget.txt | awk -F '\t' '{ printf "%s\t%s\t%s\t%.3f\t%s\t%s\n", $1, $2, $3, $7, $14, $15 }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $5 "\t" $6 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.somaticlow
+    sed -i -e "s/PIKACHU_nsomaticlow/${NSOMATICLOW}/g" ${CMDLID}-${USERID}.html
+    PERCSOMATICLOW=`echo "scale=4; ${NSOMATICLOW}/${NREGIONS}*100" | bc`
+    sed -i -e "s/PIKACHU_percsomaticlow/${PERCSOMATICLOW}/g" ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_germlinelow" , "No Germline provided.") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk 'BEGIN{getline bobo < ".HTML.somaticlow"}/PIKACHU_somaticlow/{gsub("PIKACHU_somaticlow", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_ngermlinelow/NA/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_percgermlinelow/NA/g" ${CMDLID}-${USERID}.html
+else
+    BEDSIZE=`sort -k1,1 -k2,2n ${BED}.bed | bedtools merge -i stdin | awk -F'\t' 'BEGIN{SUM=0}{ SUM+=$3-$2 }END{print SUM}'`
+    NREGIONS=`sort -k1,1 -k2,2n ${BED}.bed | bedtools merge -i stdin | wc -l`
+    PANELSIZE=`echo -e "${NREGIONS}*200 + ${BEDSIZE}" | bc -l`
+    ## tumour/germline match
+    bgzip -c ${CMDLIDGERMLINE}*hg38.bwa.QC.vcf > .HTML.${CMDLIDGERMLINE}.vcf.gz
+    tabix .HTML.${CMDLIDGERMLINE}.vcf.gz
+    RELATEDNESS="are unknown whether they come"
+    sed -i -e "s/PIKACHU_pihat/NA/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_relatedness/${RELATEDNESS}/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_Nregions/${NREGIONS}/g" ${CMDLID}-${USERID}.html
+    ## table
+    grep ${CMDLIDGERMLINE} *.QC.txt | awk -F '\t' '{ print $1 "\t" $4 "\t" $16 "\t" $25 "\t" $27 "\t" $32 "\t" $34 "\t" $36 "\t" $40 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 }' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $3 , substr($3,1,6) , $3 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $4 , substr($4,1,6) , $4 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $5 , substr($5,1,6) , $5 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $6 , substr($6,1,6) , $6 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $7 , substr($7,1,6) , $7 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $8 , substr($8,1,6) , $8 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $9 , substr($9,1,6) , $9 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $10 , substr($10,1,6) , $10 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $11 , substr($11,1,6) , $11 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $12 , substr($12,1,6) , $12 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $13 , substr($13,1,6) , $13 ) }1' | awk -F '\t' 'BEGIN { OFS="\t" } { sub( $14 , substr($14,1,6) , $14 ) }1' >> .HTML.QCTABLE
+    sed -i -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" .HTML.QCTABLE
+    sed -i -e "s/\t/ <\/td> <td> /g" .HTML.QCTABLE
+    sed -i -e ':a;N;$!ba;s/\n/ /g' .HTML.QCTABLE
+    awk 'BEGIN{getline bobo < ".HTML.QCTABLE"}/PIKACHU_qctable/{gsub("PIKACHU_qctable", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    base64 ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.Frag.png | sed ':a;N;$!ba;s/\n/ /g' > .HTML.germlinecovfrag.base64
+    awk 'BEGIN{getline bobo < ".HTML.germlinecovfrag.base64"}/PIKACHU_germlinecovfrag/{gsub("PIKACHU_germlinecovfrag", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sed -i -e "/PIKACHU_somaticcovfrag/d" ${CMDLID}-${USERID}.html
+    ## Low Coverage Regions
+    NGERMLINELOW=`awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.pertarget.txt | wc -l`
+    awk -F '\t' -v SNVTHRESHOLD="${SNVTHRESHOLD}" '{ if ( $7 < ( SNVTHRESHOLD / 4 ) ) print }' ${CMDLIDGERMLINE}*/${CMDLIDGERMLINE}*.pertarget.txt | awk -F '\t' '{ printf "%s\t%s\t%s\t%.3f\t%s\t%s\n", $1, $2, $3, $7, $14, $15 }' | awk -F '\t' '{ print $1 ":" $2 "-" $3 "\t" $4 "\t" $5 "\t" $6 }' | sed -e "s/\(.\+\)/<tr> <td> \1 <\/td> <\/tr>/" | sed -e "s/\t/ <\/td> <td> /g" | sed ':a;N;$!ba;s/\n/ /g' | sed -e "s/-9//g" > .HTML.germlinelow
+    sed -i -e "s/PIKACHU_ngermlinelow/${NGERMLINELOW}/g" ${CMDLID}-${USERID}.html
+    PERCGERMLINELOW=`echo "scale=4; ${NGERMLINELOW}/${NREGIONS}*100" | bc`
+    sed -i -e "s/PIKACHU_percgermlinelow/${PERCGERMLINELOW}/g" ${CMDLID}-${USERID}.html
+    awk -F '\t' '{ sub (".*PIKACHU_somaticlow" , "No Somatic provided.") }1' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    awk 'BEGIN{getline bobo < ".HTML.germlinelow"}/PIKACHU_germlinelow/{gsub("PIKACHU_germlinelow", bobo)}bobo' ${CMDLID}-${USERID}.html > kk.html && mv kk.html ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_nsomaticlow/NA/g" ${CMDLID}-${USERID}.html
+    sed -i -e "s/PIKACHU_percsomaticlow/NA/g" ${CMDLID}-${USERID}.html
+fi
+
+## insert bed size in the methods section
+sed -i -e "s/PIKACHU_panelsize/${BEDSIZE}/g" ${CMDLID}-${USERID}.html
+
+################################################################################### Clear temp files
+rm .HTML*
